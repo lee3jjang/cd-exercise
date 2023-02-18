@@ -1,0 +1,20 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gke-test
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: gke-test
+  template:
+    metadata:
+      labels:
+        app: gke-test
+    spec:
+      containers:
+        - name: gke-test
+          image: myapp
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 80

@@ -1,0 +1,76 @@
+name: Build and Deploy to GKE
+
+on:
+  push:
+    branches: ["main"]
+
+env:
+  PROJECT_ID: quiet-vector-371917
+  GAR_LOCATION: us-central1
+  GKE_CLUSTER: cluster-1
+  GKE_ZONE: us-central1-c
+  DEPLOYMENT_NAME: gke-test
+  REPOSITORY: hello-docker-registry
+  IMAGE: myserver
+
+jobs:
+  setup-build-publish-deploy:
+    name: Setup, Build, Publish, and Deploy
+    runs-on: ubuntu-latest
+
+    steps:
+      # 체크아웃
+      - name: Checkout
+        uses: actions/checkout@v3
+
+      # 서비스 계정 인증
+      - id: "auth"
+        name: "Authenticate to Google Cloud"
+        uses: "google-github-actions/auth@v1"
+        with:
+          credentials_json: "${{ secrets.GKE_KEY }}"
+
+      # gcloud CLI 설치 (도커 인증 하려면 필요한데 없이 하는 방법도 있는거 같음)
+      - name: "Set up gcloud CLI"
+        uses: google-github-actions/setup-gcloud@v1
+
+      # 도커 인증 (도커 이미지 푸시 하려면 필요함)
+      - name: "Docker configuration"
+        run: |-
+          gcloud auth configure-docker $GAR_LOCATION-docker.pkg.dev
+
+      # GKE 인증 (gcloud CLI 없이도 됨)
+      - name: Set up GKE credentials
+        uses: google-github-actions/get-gke-credentials@v1
+        with:
+          cluster_name: ${{ env.GKE_CLUSTER }}
+          location: "${{ env.GKE_ZONE }}"
+
+      # 도커 이미지 빌드
+      - name: Build
+        run: |-
+          docker build \
+            --tag "$GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:$GITHUB_SHA" \
+            .
+
+      # 도커 이미지 푸시
+      - name: Publish
+        run: |-
+          docker push "$GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:$GITHUB_SHA"
+
+      # Kustomize 설치
+      - name: Set up Kustomize
+        working-directory: "./k8s"
+        run: |-
+          curl -sfLo kustomize https://github.com/kubernetes-sigs/kustomize/releases/download/v3.1.0/kustomize_3.1.0_linux_amd64
+          chmod u+x ./kustomize
+
+      # 쿠버네티스 오브젝트 이미지 교체 / 추가 빌드 / 적용
+      - name: Deploy
+        working-directory: "./k8s/overlays"
+        run: |-
+          # replacing the image name in the k8s template
+          ../kustomize edit set image myapp=$GAR_LOCATION-docker.pkg.dev/$PROJECT_ID/$REPOSITORY/$IMAGE:$GITHUB_SHA
+          ../kustomize build . | kubectl apply -f -
+          kubectl rollout status deployment/$DEPLOYMENT_NAME
+          kubectl get services -o wide
